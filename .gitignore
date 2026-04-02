@@ -1,4 +1,6 @@
 amd64/.build/
 amd64/dist/
+amd64/build.log
 arm64/.build/
 arm64/dist/
+arm64/build.log

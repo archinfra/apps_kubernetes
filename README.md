@@ -1,135 +1,274 @@
-# OneKube Offline Installer
+# OneKube K8s Offline Installer
 
-这是一个基于 Sealos 的 Kubernetes 离线安装器项目，目标是把 Kubernetes 集群交付收敛成一套可维护、可复用、可在 GitHub Actions 中自动构建的双架构离线包。
+这套脚本用于基于 `sealos` 构建 Kubernetes 离线安装包，并同时支持：
 
-## 项目特性
+- `amd64`
+- `arm64`
+- `full` 全离线包
+- `lite` 半离线包
 
-- 同时支持 `amd64` 和 `arm64`
-- 支持生成自解压 `.run` 安装包
-- 保留原有 `sealos run` 部署方案，不大改安装方式
-- 公共变量与公共逻辑已经抽离，后续升级只需要改一处
-- 支持在 GitHub Actions 中自动构建并上传离线包产物
+当前仓库已经按“单一脚本源 + 构建时按架构出包”的方式整理过，不再维护两套重复的 `amd64/`、`arm64/` 脚本目录，后续维护成本会低很多。
 
-## 目录结构
+## 设计目标
 
-- `common/`
-  - `component-versions.env`: 统一维护组件版本和镜像名
-  - `build-common.sh`: 公共构建逻辑
-  - `install-common.sh`: 公共安装逻辑
-- `amd64/`
-  - `versions.env`: amd64 架构变量入口
-  - `build.sh`: amd64 构建入口
-  - `install.sh`: amd64 安装入口，也是 `.run` 包头
-- `arm64/`
-  - `versions.env`: arm64 架构变量入口
-  - `build.sh`: arm64 构建入口
-  - `install.sh`: arm64 安装入口，也是 `.run` 包头
-- `.github/workflows/`
-  - `build-k8s-offline.yml`: GitHub Actions 构建脚本
+这次调整主要遵循两条原则：
 
-## 默认版本矩阵
+- 不大改原有部署方案，仍然使用 `sealos run kubernetes-docker helm cilium`
+- 把公共变量、公共构建逻辑、公共安装逻辑收敛，减少后续版本升级时的重复修改
 
-默认版本统一维护在：
+所以现在保留的核心行为没有变：
+
+- Kubernetes 组件仍然来自 `kubernetes-docker`
+- CNI 仍然使用 `cilium`
+- Helm 仍然作为独立组件随包分发
+- 安装脚本最终还是通过 `sealos` 完成集群安装或重置
+
+## 当前版本
+
+统一版本文件在：
 
 ```bash
 common/component-versions.env
 ```
 
-当前默认值：
+当前默认版本为：
 
-- `Sealos v5.1.1`
-- `Kubernetes-Docker v1.31.11`
-- `Helm v3.19.2`
-- `Cilium 1.18.1`
+- `sealos v5.1.1`
+- `kubernetes-docker v1.31.11`
+- `helm v3.19.2`
+- `cilium 1.18.1`
 
-版本选择原则：
+如果后面只需要升级组件版本，优先改这一个文件即可。
 
-- 优先选择较新的稳定版本
-- 同时确认 `registry.cn-shanghai.aliyuncs.com/labring` 中真实存在对应镜像标签
-- 不为了“追最新”破坏现有 Sealos 离线部署兼容性
+## 仓库结构
 
-## 维护方式
-
-日常升级版本，主要只改一个文件：
-
-```bash
-common/component-versions.env
+```text
+.
+├── .github/workflows/build-k8s-offline.yml
+├── build.sh
+├── install.sh
+├── versions.env
+└── common
+    ├── build-common.sh
+    ├── component-versions.env
+    └── install-common.sh
 ```
 
-这会同时影响：
+各文件职责如下：
 
-- `amd64/versions.env`
-- `arm64/versions.env`
-- 构建阶段生成的 `image.json`
-- `.run` 安装包内部使用的版本元数据
+- `build.sh`
+  - 统一构建入口
+  - 给 GitHub Actions 和手工构建共用
+- `install.sh`
+  - `.run` 安装包头部脚本
+  - 支持源码目录直接执行 `show-defaults`
+- `versions.env`
+  - 提供源码模式下的默认版本展示
+- `common/component-versions.env`
+  - 统一维护组件版本和镜像 tar 名称
+- `common/build-common.sh`
+  - 真正的构建逻辑
+  - 负责下载 Sealos 二进制、按架构拉镜像、打 `.run` 包
+- `common/install-common.sh`
+  - 真正的安装逻辑
+  - 负责预检查、装二进制、导入镜像、执行 `sealos run/reset`
+
+## 为什么不用两套目录了
+
+之前 `amd64` 和 `arm64` 目录的大部分内容其实是重复的，真正跟架构强相关的只有两类东西：
+
+- `sealos` 及相关工具二进制
+- Docker 拉取镜像时的 `--platform`
+
+而镜像名字本身并不需要拆成两套，例如：
+
+- `registry.cn-shanghai.aliyuncs.com/labring/kubernetes-docker:<tag>`
+- `registry.cn-shanghai.aliyuncs.com/labring/helm:<tag>`
+- `registry.cn-shanghai.aliyuncs.com/labring/cilium:<tag>`
+
+架构差异通过构建阶段处理即可：
+
+```bash
+docker pull --platform linux/amd64 ...
+docker pull --platform linux/arm64 ...
+```
+
+所以现在改成一套源码，按 `--arch` 选择目标架构，这样版本升级、参数调整、安装逻辑修复都只改一处。
+
+## 两种包型说明
+
+### `full`
+
+`full` 表示全离线包，包含：
+
+- `sealos`
+- `sealctl`
+- `image-cri-shim`
+- `lvscare`
+- `kubernetes.tar`
+- `helm.tar`
+- `cilium.tar`
+
+适合目标机器无法访问镜像仓库的场景。
+
+### `lite`
+
+`lite` 表示半离线包，包含：
+
+- `sealos`
+- `sealctl`
+- `image-cri-shim`
+- `lvscare`
+- 镜像元信息
+- 不包含任何镜像 tar
+
+适合目标机器还能联网拉镜像，或者现场已有私有仓库可用的场景。
+
+## 输出文件
+
+标准构建会产生 4 个安装包：
+
+```text
+dist/k8s-sealos-linux-amd64-full.run
+dist/k8s-sealos-linux-amd64-lite.run
+dist/k8s-sealos-linux-arm64-full.run
+dist/k8s-sealos-linux-arm64-lite.run
+```
+
+同时每个包都会生成对应校验文件：
+
+```text
+dist/*.run.sha256
+```
+
+## Sealos 二进制处理方式
+
+现在仓库里不再需要提交这些大文件：
+
+- `amd64/bin/*`
+- `arm64/bin/*`
+
+构建时会自动从 Sealos 官方 release 下载对应架构压缩包，然后解压出：
+
+- `sealos`
+- `sealctl`
+- `image-cri-shim`
+- `lvscare`
+
+下载来源：
+
+- [Sealos Releases](https://github.com/labring/sealos/releases)
+
+本地缓存目录：
+
+```bash
+.cache/downloads/
+.cache/bin/<arch>/
+```
+
+这样做的好处是：
+
+- Git 仓库不会再被大二进制污染
+- `amd64` / `arm64` 不再需要维护两份 `bin`
+- GitHub Actions 可以直接按架构拉取官方二进制构建
+
+## 镜像处理方式
+
+镜像名保持统一，不再因为架构拆目录。
+
+构建时根据目标架构决定拉取平台：
+
+```bash
+docker pull --platform linux/amd64 <image>
+docker pull --platform linux/arm64 <image>
+```
+
+镜像 tar 缓存目录：
+
+```bash
+.cache/images/<arch>/
+```
+
+其中：
+
+- `full` 包会把 tar 一起打进 `.run`
+- `lite` 包不会打 tar，只保留元信息
 
 ## 本地构建
 
-### 1. 只校验脚本结构并复用现有镜像 tar
-
-适合先验证脚本逻辑：
+先给脚本执行权限：
 
 ```bash
-cd amd64
 chmod +x build.sh install.sh
-./build.sh --skip-binary-download --skip-image-prepare
 ```
 
-### 2. 完整构建离线安装包
+### 只构建一个包
 
-适合正式交付：
+构建 `amd64` 全离线包：
 
 ```bash
-cd amd64
-chmod +x build.sh install.sh
-./build.sh --force
+./build.sh --arch amd64 --bundle full --force
 ```
 
-构建产物：
-
-- `dist/k8s-sealos-linux-amd64.run`
-- `dist/k8s-sealos-linux-amd64.run.sha256`
-
-`arm64` 同理。
-
-## GitHub Actions 构建
-
-项目已经提供：
+构建 `arm64` 半离线包：
 
 ```bash
-.github/workflows/build-k8s-offline.yml
+./build.sh --arch arm64 --bundle lite --force
 ```
 
-工作流能力：
-
-- 在 `push`、`pull_request`、`workflow_dispatch` 时自动构建
-- 同时构建 `amd64` 和 `arm64`
-- 上传 `.run` 和 `.sha256` 作为 workflow artifact
-- 如果是 tag 触发，还会自动创建 GitHub Release 并上传产物
-
-### 推荐发布方式
-
-如果准备正式发版，建议：
+### 一次构建全部 4 个包
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+./build.sh --arch all --bundle all --force
 ```
 
-这样 GitHub Actions 会直接把双架构产物挂到 Release。
-
-## 安装方式
-
-### 查看默认版本
+### 只重打包，不重新下载二进制和镜像
 
 ```bash
-./k8s-sealos-linux-amd64.run show-defaults
+./build.sh --arch amd64 --bundle full --skip-binary-download --skip-image-prepare
 ```
 
-### 安装前检查
+参数说明：
+
+- `--arch <amd64|arm64|all>`
+  - 选择目标架构
+- `--bundle <full|lite|all>`
+  - 选择包型
+- `--skip-binary-download`
+  - 跳过 Sealos 二进制下载，直接复用缓存
+- `--skip-image-prepare`
+  - 跳过镜像拉取和保存，直接复用缓存
+- `--force`
+  - 强制重新准备缓存
+- `--clean`
+  - 清理 `.build` 和 `dist`
+
+## 默认值查看
+
+源码目录下可直接查看默认配置：
 
 ```bash
-./k8s-sealos-linux-amd64.run precheck \
+./install.sh show-defaults
+```
+
+查看指定架构的默认值也可以：
+
+```bash
+./install.sh show-defaults --arch arm64
+```
+
+对已构建好的安装包同样适用：
+
+```bash
+./k8s-sealos-linux-amd64-full.run show-defaults
+```
+
+## 安装包使用方式
+
+### 安装前预检查
+
+```bash
+./k8s-sealos-linux-amd64-full.run precheck \
   --masters 10.0.0.11,10.0.0.12,10.0.0.13 \
   --nodes 10.0.0.21,10.0.0.22 \
   --passwd 'your-password' \
@@ -139,7 +278,7 @@ git push origin v0.1.0
 ### 安装集群
 
 ```bash
-./k8s-sealos-linux-amd64.run install \
+./k8s-sealos-linux-amd64-full.run install \
   --masters 10.0.0.11,10.0.0.12,10.0.0.13 \
   --nodes 10.0.0.21,10.0.0.22 \
   --passwd 'your-password' \
@@ -149,44 +288,121 @@ git push origin v0.1.0
 ### 重置集群
 
 ```bash
-./k8s-sealos-linux-amd64.run reset \
+./k8s-sealos-linux-amd64-full.run reset \
   --masters 10.0.0.11,10.0.0.12,10.0.0.13 \
   --nodes 10.0.0.21,10.0.0.22 \
   --passwd 'your-password' \
   --yes
 ```
 
-## 常用参数
+## 常用安装参数
 
-- `--data-root`: Sealos 数据目录，默认 `/data`
-- `--cri-data`: 运行时数据目录，默认 `/data/containerd`
-- `--registry`: 镜像前缀
-- `--skip-image-load`: 跳过离线镜像导入
-- `--skip-binary-install`: 跳过二进制安装
-- `--skip-precheck`: 跳过安装前检查
-- `--dry-run`: 只打印最终 sealos 命令，不真正执行
-- `--debug`: 打开脚本和 Sealos 调试信息
-- `--`: 后续参数直接透传给 `sealos`
+- `--masters`
+  - 必填，主节点 IP 列表，逗号分隔
+- `--nodes`
+  - 可选，工作节点 IP 列表，逗号分隔
+- `--passwd`
+  - SSH 密码
+- `--port`
+  - SSH 端口，默认 `22`
+- `--data-root`
+  - Sealos 数据目录，默认 `/data`
+- `--cri-data`
+  - 容器运行时数据目录，默认 `/data/containerd`
+- `--registry`
+  - 覆盖默认镜像仓库前缀
+- `--k8s-version`
+  - 临时覆盖 Kubernetes 镜像 tag
+- `--helm-version`
+  - 临时覆盖 Helm 镜像 tag
+- `--cni-version`
+  - 临时覆盖 Cilium 镜像 tag
+- `--skip-image-load`
+  - 跳过本地导入镜像 tar
+- `--skip-binary-install`
+  - 跳过安装 Sealos 二进制到 `/usr/local/bin`
+- `--skip-precheck`
+  - 跳过本地预检查
+- `--dry-run`
+  - 只打印最终的 `sealos` 命令，不实际执行
+- `--debug`
+  - 打开 shell trace，并向 `sealos` 传递 `--debug`
+- `--`
+  - 将后续参数原样透传给 `sealos`
 
-示例：
+## 运行后的环境文件
+
+安装脚本会生成：
 
 ```bash
-./k8s-sealos-linux-amd64.run install \
-  --masters 10.0.0.11 \
-  --passwd 'your-password' \
-  --yes \
-  -- --single
+/etc/k8s-sealos/cluster.env
 ```
 
-## 安装后的状态文件
+里面会记录：
 
-安装脚本会写入：
+- 当前包的架构
+- 当前包型
+- 组件版本
+- data root
+- cri data
+- masters / nodes
+- sealos 运行相关环境变量
 
-- `/etc/k8s-sealos/cluster.env`
+后续排查或二次执行时可以直接：
 
-这个文件记录：
+```bash
+source /etc/k8s-sealos/cluster.env
+```
 
-- 当前版本矩阵
-- Sealos 运行目录
-- 数据目录
-- 当前 master / node 参数
+## GitHub Actions
+
+工作流文件：
+
+```bash
+.github/workflows/build-k8s-offline.yml
+```
+
+默认会构建 4 个组合：
+
+- `amd64/full`
+- `amd64/lite`
+- `arm64/full`
+- `arm64/lite`
+
+行为说明：
+
+- `push` 到 `main/master`
+  - 自动构建 4 种安装包并上传 artifact
+- `pull_request`
+  - 自动做同样的构建校验
+- `workflow_dispatch`
+  - 支持手工触发构建
+- `tag v*`
+  - 在构建完成后自动创建 GitHub Release，并上传所有 `.run` 和 `.sha256`
+
+GitHub Actions 里已经按现在的设计处理了两件关键事：
+
+- 不依赖仓库内置 `bin`
+- 构建时按架构下载 Sealos release 二进制
+
+也就是说，GitHub 仓库只保留源码，真正出包时再动态拉取对应架构内容。
+
+## 维护建议
+
+后面如果你继续维护这套脚本，通常只需要关注这几个入口：
+
+1. 升级组件版本
+   - 修改 `common/component-versions.env`
+2. 调整构建逻辑
+   - 修改 `common/build-common.sh`
+3. 调整安装逻辑
+   - 修改 `common/install-common.sh`
+4. 调整 CI/CD
+   - 修改 `.github/workflows/build-k8s-offline.yml`
+
+## 注意事项
+
+- `full` 包构建依赖 Docker，因为需要拉取并导出镜像 tar
+- `lite` 包不包含镜像 tar，目标机器需要能访问镜像来源，或者你手工改成自己的可达仓库
+- 不建议提交 `.cache`、`.build`、`dist` 到 Git 仓库
+- 如需进一步升级版本，建议优先验证上游镜像 tag 是否真实存在，再更新统一版本文件

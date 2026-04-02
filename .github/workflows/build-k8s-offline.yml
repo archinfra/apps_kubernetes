@@ -10,6 +10,9 @@ on:
       - "v*"
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -19,27 +22,37 @@ jobs:
         arch:
           - amd64
           - arm64
+        bundle:
+          - full
+          - lite
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Cache Sealos downloads
+        uses: actions/cache@v4
+        with:
+          path: .cache/downloads
+          key: sealos-downloads-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('common/component-versions.env') }}
+          restore-keys: |
+            sealos-downloads-${{ runner.os }}-${{ matrix.arch }}-
+
       - name: Ensure executable permissions
         run: |
-          chmod +x "${{ matrix.arch }}/build.sh" "${{ matrix.arch }}/install.sh"
+          chmod +x build.sh install.sh
 
-      - name: Build installer
+      - name: Build package
         run: |
-          cd "${{ matrix.arch }}"
-          ./build.sh --force
+          ./build.sh --arch "${{ matrix.arch }}" --bundle "${{ matrix.bundle }}" --force
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: k8s-sealos-${{ matrix.arch }}
+          name: k8s-sealos-${{ matrix.arch }}-${{ matrix.bundle }}
           path: |
-            ${{ matrix.arch }}/dist/*.run
-            ${{ matrix.arch }}/dist/*.sha256
+            dist/k8s-sealos-linux-${{ matrix.arch }}-${{ matrix.bundle }}.run
+            dist/k8s-sealos-linux-${{ matrix.arch }}-${{ matrix.bundle }}.run.sha256
           if-no-files-found: error
 
   release:
@@ -48,24 +61,13 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Ensure executable permissions
-        run: |
-          chmod +x amd64/build.sh amd64/install.sh
-          chmod +x arm64/build.sh arm64/install.sh
-
-      - name: Build release artifacts
-        run: |
-          cd amd64 && ./build.sh --force
-          cd ../arm64 && ./build.sh --force
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            amd64/dist/*.run
-            amd64/dist/*.sha256
-            arm64/dist/*.run
-            arm64/dist/*.sha256
+          files: artifacts/*

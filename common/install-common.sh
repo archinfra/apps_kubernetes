@@ -34,6 +34,9 @@ CNI_IMAGE_NAME=""
 CNI_VERSION=""
 ARCH="${ARCH:-unknown}"
 PLATFORM="${PLATFORM:-unknown}"
+PACKAGE_VARIANT="${PACKAGE_VARIANT:-unknown}"
+INCLUDE_IMAGES="${INCLUDE_IMAGES:-unknown}"
+ARCH_OVERRIDE=""
 
 FORCE="false"
 DEBUG="false"
@@ -72,40 +75,35 @@ die() {
 }
 
 usage() {
-  cat <<EOF
-用法:
-  $(basename "$0") install|reset|precheck|show-defaults [选项] [-- <额外 sealos 参数>]
+  cat <<'EOF'
+Usage:
+  ./installer.run install|reset|precheck|show-defaults [options] [-- <extra sealos args>]
 
-命令:
-  install             安装 Kubernetes 集群
-  reset               重置 Kubernetes 集群
-  precheck            检查安装包、参数和本机环境
-  show-defaults       显示默认版本矩阵和参数
+Commands:
+  install             Install a Kubernetes cluster
+  reset               Reset a Kubernetes cluster
+  precheck            Validate package contents and local runtime prerequisites
+  show-defaults       Print bundled defaults
 
-常用选项:
-  --masters <ip,ip>           Master 节点 IP，多个地址用逗号分隔
-  --nodes <ip,ip>             Worker 节点 IP，多个地址用逗号分隔
-  --passwd <password>         SSH 密码；如果已做免密可以不填
-  --port <port>               SSH 端口，默认 22
-  --data-root <path>          Sealos 数据根目录，默认 /data
-  --cri-data <path>           容器运行时数据目录，默认 /data/containerd
-  --registry <registry>       镜像仓库前缀，默认 registry.cn-shanghai.aliyuncs.com/labring
-  --k8s-version <tag>         Kubernetes 镜像标签
-  --helm-version <tag>        Helm 镜像标签
-  --cni-version <tag>         Cilium 镜像标签
-  --skip-image-load           跳过本地镜像导入
-  --skip-binary-install       跳过安装 Sealos 二进制
-  --skip-precheck             跳过安装前检查
-  --dry-run                   只打印最终 sealos 命令，不真正执行
-  --force                     透传 --force 给 sealos，同时跳过交互确认
-  --debug                     透传 --debug 给 sealos，并打开脚本调试信息
-  -y, --yes                   自动确认
-  -h, --help                  显示帮助
-
-说明:
-  1. 直接在仓库目录执行 install.sh 时，会使用当前目录下的 bin/ 和 images/
-  2. 执行 .run 安装包时，会先自动解压 payload 再执行同一套安装逻辑
-  3. 环境变量统一写入 ${ENV_FILE}，不再污染 ~/.bashrc
+Options:
+  --masters <ip,ip>           Comma-separated master node IPs
+  --nodes <ip,ip>             Comma-separated worker node IPs
+  --passwd <password>         SSH password
+  --port <port>               SSH port, default: 22
+  --data-root <path>          Sealos data root, default: /data
+  --cri-data <path>           Container runtime data root, default: /data/containerd
+  --registry <registry>       Override image registry prefix
+  --k8s-version <tag>         Override Kubernetes image tag
+  --helm-version <tag>        Override Helm image tag
+  --cni-version <tag>         Override Cilium image tag
+  --skip-image-load           Skip local image import
+  --skip-binary-install       Skip installing Sealos binaries
+  --skip-precheck             Skip local precheck
+  --dry-run                   Print the sealos command without executing it
+  --force                     Pass --force to sealos and skip confirmation
+  --debug                     Pass --debug to sealos and enable shell tracing
+  -y, --yes                   Auto confirm prompts
+  -h, --help                  Show help
 EOF
 }
 
@@ -122,9 +120,9 @@ load_runtime_metadata() {
   local manifest_file="${CONTEXT_DIR}/release-manifest.env"
   local binary
 
-  [[ -f "${versions_file}" ]] || die "缺少版本文件: ${versions_file}"
-  [[ -d "${CONTEXT_DIR}/bin" ]] || die "缺少二进制目录: ${CONTEXT_DIR}/bin"
-  [[ -d "${CONTEXT_DIR}/images" ]] || die "缺少镜像目录: ${CONTEXT_DIR}/images"
+  [[ -f "${versions_file}" ]] || die "Missing versions file: ${versions_file}"
+  [[ -d "${CONTEXT_DIR}/bin" ]] || die "Missing binary directory: ${CONTEXT_DIR}/bin"
+  [[ -d "${CONTEXT_DIR}/images" ]] || die "Missing image directory: ${CONTEXT_DIR}/images"
 
   # shellcheck disable=SC1090
   source "${versions_file}"
@@ -143,6 +141,27 @@ load_runtime_metadata() {
       chmod +x "${BIN_DIR}/${binary}" || true
     fi
   done
+
+  refresh_runtime_values
+}
+
+load_show_defaults_metadata() {
+  local versions_file="${CONTEXT_DIR}/versions.env"
+  local source_versions_file="${CONTEXT_DIR}/common/component-versions.env"
+
+  if [[ -f "${versions_file}" ]]; then
+    # shellcheck disable=SC1090
+    source "${versions_file}"
+  elif [[ -f "${source_versions_file}" ]]; then
+    # shellcheck disable=SC1090
+    source "${source_versions_file}"
+    ARCH="${ARCH_OVERRIDE:-amd64}"
+    PLATFORM="linux/${ARCH}"
+    PACKAGE_VARIANT="source"
+    INCLUDE_IMAGES="n/a"
+  else
+    die "Unable to find version metadata"
+  fi
 
   refresh_runtime_values
 }
@@ -199,6 +218,10 @@ parse_args() {
         CNI_VERSION="$2"
         shift 2
         ;;
+      --arch)
+        ARCH_OVERRIDE="$2"
+        shift 2
+        ;;
       --skip-image-load)
         SKIP_IMAGE_LOAD="true"
         shift
@@ -240,7 +263,7 @@ parse_args() {
         done
         ;;
       *)
-        die "未知参数: $1"
+        die "Unknown argument: $1"
         ;;
     esac
   done
@@ -249,38 +272,41 @@ parse_args() {
 }
 
 require_root() {
-  [[ "${EUID}" -eq 0 ]] || die "请使用 root 用户执行"
+  [[ "${EUID}" -eq 0 ]] || die "Please run as root"
 }
 
 require_cmd() {
-  command -v "$1" >/dev/null 2>&1 || die "缺少命令: $1"
+  command -v "$1" >/dev/null 2>&1 || die "Missing command: $1"
 }
 
 prepare_runtime_layout() {
   load_runtime_metadata
-  log "使用运行目录: ${PAYLOAD_ROOT}"
+  log "Using runtime directory: ${PAYLOAD_ROOT}"
 }
 
 validate_args() {
   case "${ACTION}" in
     install|reset|precheck)
-      [[ -n "${MASTERS}" ]] || die "请通过 --masters 指定至少一个 master 节点"
+      [[ -n "${MASTERS}" ]] || die "At least one master node is required via --masters"
       ;;
   esac
 }
 
 show_defaults() {
   cat <<EOF
-架构:               ${ARCH}
-Sealos 版本:        ${SEALOS_VERSION}
-Kubernetes 镜像:    ${K8S_IMAGE}
-Helm 镜像:          ${HELM_IMAGE}
-Cilium 镜像:        ${CNI_IMAGE}
+arch:             ${ARCH}
+platform:         ${PLATFORM}
+packageVariant:   ${PACKAGE_VARIANT}
+includeImages:    ${INCLUDE_IMAGES}
+sealosVersion:    ${SEALOS_VERSION}
+kubernetesImage:  ${K8S_IMAGE}
+helmImage:        ${HELM_IMAGE}
+ciliumImage:      ${CNI_IMAGE}
 
-默认参数:
-  data-root:        ${DATA_ROOT}
-  cri-data:         ${CRI_DATA}
-  ssh-port:         ${PORT}
+defaults:
+  data-root:      ${DATA_ROOT}
+  cri-data:       ${CRI_DATA}
+  ssh-port:       ${PORT}
 EOF
 }
 
@@ -294,9 +320,9 @@ run_prechecks() {
   require_cmd install
   require_cmd df
 
-  [[ -f "${BIN_DIR}/sealos" ]] || die "缺少 sealos 二进制: ${BIN_DIR}/sealos"
-  [[ -f "${BIN_DIR}/sealctl" ]] || warn "缺少 sealctl 二进制: ${BIN_DIR}/sealctl"
-  [[ -f "${IMAGE_DIR}/image.json" ]] || warn "缺少 image.json，继续执行但不利于排障"
+  [[ -f "${BIN_DIR}/sealos" ]] || die "Missing sealos binary: ${BIN_DIR}/sealos"
+  [[ -f "${BIN_DIR}/sealctl" ]] || warn "Missing sealctl binary: ${BIN_DIR}/sealctl"
+  [[ -f "${IMAGE_DIR}/image.json" ]] || warn "Missing image.json"
 
   probe_dir="${DATA_ROOT}"
   while [[ ! -d "${probe_dir}" && "${probe_dir}" != "/" ]]; do
@@ -304,8 +330,7 @@ run_prechecks() {
   done
   [[ -d "${probe_dir}" ]] || probe_dir="/"
 
-  log "安装前检查通过"
-  log "  数据目录检查位置: ${probe_dir}"
+  log "Precheck passed"
   df -h "${probe_dir}" | tail -n 1
 }
 
@@ -314,24 +339,26 @@ confirm_plan() {
 
   cat <<EOF
 ==================================================
-操作类型:            ${ACTION}
-Master 节点:         ${MASTERS}
-Worker 节点:         ${NODES:-<none>}
-SSH 端口:            ${PORT}
-数据目录:            ${DATA_ROOT}
-CRI 数据目录:        ${CRI_DATA}
-Sealos 版本:         ${SEALOS_VERSION}
-Kubernetes 镜像:     ${K8S_IMAGE}
-Helm 镜像:           ${HELM_IMAGE}
-Cilium 镜像:         ${CNI_IMAGE}
-跳过二进制安装:      ${SKIP_BINARY_INSTALL}
-跳过镜像导入:        ${SKIP_IMAGE_LOAD}
-Dry run:             ${DRY_RUN}
+action:            ${ACTION}
+masters:           ${MASTERS}
+nodes:             ${NODES:-<none>}
+sshPort:           ${PORT}
+dataRoot:          ${DATA_ROOT}
+criData:           ${CRI_DATA}
+packageVariant:    ${PACKAGE_VARIANT}
+includeImages:     ${INCLUDE_IMAGES}
+sealosVersion:     ${SEALOS_VERSION}
+kubernetesImage:   ${K8S_IMAGE}
+helmImage:         ${HELM_IMAGE}
+ciliumImage:       ${CNI_IMAGE}
+skipBinaryInstall: ${SKIP_BINARY_INSTALL}
+skipImageLoad:     ${SKIP_IMAGE_LOAD}
+dryRun:            ${DRY_RUN}
 ==================================================
 EOF
 
-  read -r -p "确认继续执行? [y/N]: " answer
-  [[ "${answer}" =~ ^[Yy]$ ]] || die "操作已取消"
+  read -r -p "Continue? [y/N]: " answer
+  [[ "${answer}" =~ ^[Yy]$ ]] || die "Canceled"
 }
 
 backup_if_exists() {
@@ -351,13 +378,13 @@ install_binaries() {
     [[ -f "${BIN_DIR}/${binary}" ]] || continue
     backup_if_exists "${SYSTEM_BIN_DIR}/${binary}"
     install -m 0755 "${BIN_DIR}/${binary}" "${SYSTEM_BIN_DIR}/${binary}"
-    success "已安装二进制: ${SYSTEM_BIN_DIR}/${binary}"
+    success "Installed ${SYSTEM_BIN_DIR}/${binary}"
   done
 }
 
 ensure_sealos_available() {
-  command -v sealos >/dev/null 2>&1 || die "未找到 sealos 命令"
-  log "Sealos 版本: $(sealos version 2>/dev/null | head -n 1 || echo unknown)"
+  command -v sealos >/dev/null 2>&1 || die "sealos command not found"
+  log "Sealos version: $(sealos version 2>/dev/null | head -n 1 || echo unknown)"
 }
 
 load_images() {
@@ -365,20 +392,20 @@ load_images() {
   local loaded=0
 
   if ! compgen -G "${IMAGE_DIR}/*.tar" >/dev/null 2>&1; then
-    warn "未发现镜像 tar 文件，跳过镜像导入"
+    warn "No image tar files found, skipping image import"
     return 0
   fi
 
   for image_tar in "${IMAGE_DIR}"/*.tar; do
-    log "导入镜像: $(basename "${image_tar}")"
+    log "Loading $(basename "${image_tar}")"
     if sealos load -i "${image_tar}"; then
       loaded=$((loaded + 1))
     else
-      warn "镜像导入失败: $(basename "${image_tar}")"
+      warn "Failed to load $(basename "${image_tar}")"
     fi
   done
 
-  [[ "${loaded}" -gt 0 ]] || warn "没有镜像成功导入，请确认镜像包是否完整"
+  [[ "${loaded}" -gt 0 ]] || warn "No image tar file was imported successfully"
 }
 
 write_environment_file() {
@@ -388,6 +415,8 @@ write_environment_file() {
 # Generated by ${APP_NAME}
 export ARCH="${ARCH}"
 export PLATFORM="${PLATFORM}"
+export PACKAGE_VARIANT="${PACKAGE_VARIANT}"
+export INCLUDE_IMAGES="${INCLUDE_IMAGES}"
 export SEALOS_VERSION="${SEALOS_VERSION}"
 export IMAGE_REGISTRY="${IMAGE_REGISTRY}"
 export K8S_IMAGE_NAME="${K8S_IMAGE_NAME}"
@@ -406,7 +435,7 @@ export MASTERS="${MASTERS}"
 export NODES="${NODES}"
 EOF
 
-  success "已写入环境文件: ${ENV_FILE}"
+  success "Wrote ${ENV_FILE}"
 }
 
 run_sealos() {
@@ -447,12 +476,12 @@ run_sealos() {
     sealos_cmd+=("${SEALOS_EXTRA_ARGS[@]}")
   fi
 
-  log "执行命令:"
+  log "Executing command:"
   printf '  %q ' "${env_cmd[@]}" "${sealos_cmd[@]}"
   printf '\n'
 
   if [[ "${DRY_RUN}" == "true" ]]; then
-    warn "当前为 dry-run 模式，未真正执行 sealos"
+    warn "Dry-run enabled, sealos was not executed"
     return 0
   fi
 
@@ -463,10 +492,8 @@ show_post_install_info() {
   if [[ "${DRY_RUN}" == "true" ]]; then
     cat <<EOF
 
-dry-run 已完成，未真正执行集群操作。
-你可以基于上面打印出的 sealos 命令继续调整参数，然后再正式执行。
-
-环境变量文件:
+Dry-run completed.
+Environment file:
   ${ENV_FILE}
 EOF
     return
@@ -474,15 +501,12 @@ EOF
 
   cat <<EOF
 
-集群操作已完成。
+Cluster operation completed.
 
-后续常用命令:
+Next commands:
   source ${ENV_FILE}
   kubectl get nodes -o wide
   sealos images
-
-环境变量文件:
-  ${ENV_FILE}
 EOF
 }
 
@@ -493,13 +517,13 @@ k8s_sealos_install_main() {
     set -x
   fi
 
-  prepare_runtime_layout
-
   if [[ "${ACTION}" == "show-defaults" ]]; then
+    load_show_defaults_metadata
     show_defaults
     exit 0
   fi
 
+  prepare_runtime_layout
   require_root
   validate_args
 
@@ -508,7 +532,7 @@ k8s_sealos_install_main() {
   fi
 
   if [[ "${ACTION}" == "precheck" ]]; then
-    success "precheck 完成"
+    success "precheck complete"
     exit 0
   fi
 

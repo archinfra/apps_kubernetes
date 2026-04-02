@@ -1,0 +1,71 @@
+name: Build K8s Offline Installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - amd64
+          - arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure executable permissions
+        run: |
+          chmod +x "${{ matrix.arch }}/build.sh" "${{ matrix.arch }}/install.sh"
+
+      - name: Build installer
+        run: |
+          cd "${{ matrix.arch }}"
+          ./build.sh --force
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: k8s-sealos-${{ matrix.arch }}
+          path: |
+            ${{ matrix.arch }}/dist/*.run
+            ${{ matrix.arch }}/dist/*.sha256
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure executable permissions
+        run: |
+          chmod +x amd64/build.sh amd64/install.sh
+          chmod +x arm64/build.sh arm64/install.sh
+
+      - name: Build release artifacts
+        run: |
+          cd amd64 && ./build.sh --force
+          cd ../arm64 && ./build.sh --force
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            amd64/dist/*.run
+            amd64/dist/*.sha256
+            arm64/dist/*.run
+            arm64/dist/*.sha256

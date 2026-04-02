@@ -1,0 +1,4 @@
+amd64/.build/
+amd64/dist/
+arm64/.build/
+arm64/dist/

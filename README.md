@@ -285,6 +285,17 @@ chmod +x build.sh install.sh
   --yes
 ```
 
+### 使用私钥安装
+
+```bash
+./k8s-sealos-linux-amd64-full.run install \
+  --masters 10.0.0.11,10.0.0.12,10.0.0.13 \
+  --nodes 10.0.0.21,10.0.0.22 \
+  --user root \
+  --pk /root/.ssh/id_rsa \
+  --yes
+```
+
 ### 重置集群
 
 ```bash
@@ -303,6 +314,12 @@ chmod +x build.sh install.sh
   - 可选，工作节点 IP 列表，逗号分隔
 - `--passwd`
   - SSH 密码
+- `--user`
+  - SSH 用户名
+- `--pk`
+  - SSH 私钥路径
+- `--pk-passwd`
+  - SSH 私钥口令
 - `--port`
   - SSH 端口，默认 `22`
 - `--data-root`
@@ -329,6 +346,31 @@ chmod +x build.sh install.sh
   - 打开 shell trace，并向 `sealos` 传递 `--debug`
 - `--`
   - 将后续参数原样透传给 `sealos`
+
+## SSH 认证说明
+
+这套安装脚本是在“当前执行节点”上调用 `sealos` 去 SSH 连接所有目标节点。
+
+这意味着：
+
+- 不是你电脑能 SSH 上去就够了
+- 必须是你当前执行 `.run` 的这台机器，能够认证到所有 `masters/nodes`
+
+常见可用方式有两种：
+
+- 密码认证
+  - 传 `--passwd`
+- 私钥认证
+  - 传 `--user` 和 `--pk`
+  - 或者确保当前机器默认私钥存在于 `~/.ssh/id_rsa`
+
+如果你看到类似下面的报错：
+
+```text
+ssh: handshake failed: ssh: unable to authenticate, attempted methods [none]
+```
+
+通常不是网络不通，而是当前执行节点没有把正确的 SSH 认证方式传给 `sealos`。
 
 ## 运行后的环境文件
 

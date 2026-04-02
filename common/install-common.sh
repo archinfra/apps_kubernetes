@@ -20,6 +20,9 @@ ACTION="install"
 MASTERS=""
 NODES=""
 PASSWD=""
+SSH_USER=""
+SSH_PK=""
+SSH_PK_PASSWD=""
 PORT="22"
 DATA_ROOT="/data"
 CRI_DATA="/data/containerd"
@@ -88,7 +91,10 @@ Commands:
 Options:
   --masters <ip,ip>           Comma-separated master node IPs
   --nodes <ip,ip>             Comma-separated worker node IPs
+  --user <username>           SSH username
   --passwd <password>         SSH password
+  --pk <path>                 SSH private key path
+  --pk-passwd <password>      SSH private key passphrase
   --port <port>               SSH port, default: 22
   --data-root <path>          Sealos data root, default: /data
   --cri-data <path>           Container runtime data root, default: /data/containerd
@@ -186,8 +192,20 @@ parse_args() {
         NODES="$2"
         shift 2
         ;;
+      --user)
+        SSH_USER="$2"
+        shift 2
+        ;;
       --passwd)
         PASSWD="$2"
+        shift 2
+        ;;
+      --pk)
+        SSH_PK="$2"
+        shift 2
+        ;;
+      --pk-passwd)
+        SSH_PK_PASSWD="$2"
         shift 2
         ;;
       --port)
@@ -285,11 +303,24 @@ prepare_runtime_layout() {
 }
 
 validate_args() {
+  local default_pk=""
+
   case "${ACTION}" in
     install|reset|precheck)
       [[ -n "${MASTERS}" ]] || die "At least one master node is required via --masters"
       ;;
   esac
+
+  if [[ -n "${SSH_PK}" && ! -f "${SSH_PK}" ]]; then
+    die "SSH private key not found: ${SSH_PK}"
+  fi
+
+  if [[ -z "${PASSWD}" && -z "${SSH_PK}" ]]; then
+    default_pk="${HOME:-/root}/.ssh/id_rsa"
+    if [[ ! -f "${default_pk}" ]]; then
+      die "No SSH authentication material found. Pass --passwd, or pass --pk/--user, or ensure the default private key exists at ${default_pk}"
+    fi
+  fi
 }
 
 show_defaults() {
@@ -342,7 +373,9 @@ confirm_plan() {
 action:            ${ACTION}
 masters:           ${MASTERS}
 nodes:             ${NODES:-<none>}
+sshUser:           ${SSH_USER:-<sealos-default>}
 sshPort:           ${PORT}
+sshKey:            ${SSH_PK:-<default ~/.ssh/id_rsa>}
 dataRoot:          ${DATA_ROOT}
 criData:           ${CRI_DATA}
 packageVariant:    ${PACKAGE_VARIANT}
@@ -433,6 +466,8 @@ export DATA_ROOT="${DATA_ROOT}"
 export CRI_DATA="${CRI_DATA}"
 export MASTERS="${MASTERS}"
 export NODES="${NODES}"
+export SSH_USER="${SSH_USER}"
+export SSH_PK="${SSH_PK}"
 EOF
 
   success "Wrote ${ENV_FILE}"
@@ -454,14 +489,20 @@ run_sealos() {
     sealos_cmd=(sealos run "${K8S_IMAGE}" "${HELM_IMAGE}" "${CNI_IMAGE}")
     sealos_cmd+=(--masters "${MASTERS}")
     [[ -n "${NODES}" ]] && sealos_cmd+=(--nodes "${NODES}")
+    [[ -n "${SSH_USER}" ]] && sealos_cmd+=(--user "${SSH_USER}")
     [[ -n "${PASSWD}" ]] && sealos_cmd+=(--passwd "${PASSWD}")
+    [[ -n "${SSH_PK}" ]] && sealos_cmd+=(--pk "${SSH_PK}")
+    [[ -n "${SSH_PK_PASSWD}" ]] && sealos_cmd+=(--pk-passwd "${SSH_PK_PASSWD}")
     [[ -n "${PORT}" ]] && sealos_cmd+=(--port "${PORT}")
     sealos_cmd+=(-e "criData=${CRI_DATA}")
   else
     sealos_cmd=(sealos reset)
     sealos_cmd+=(--masters "${MASTERS}")
     [[ -n "${NODES}" ]] && sealos_cmd+=(--nodes "${NODES}")
+    [[ -n "${SSH_USER}" ]] && sealos_cmd+=(--user "${SSH_USER}")
     [[ -n "${PASSWD}" ]] && sealos_cmd+=(--passwd "${PASSWD}")
+    [[ -n "${SSH_PK}" ]] && sealos_cmd+=(--pk "${SSH_PK}")
+    [[ -n "${SSH_PK_PASSWD}" ]] && sealos_cmd+=(--pk-passwd "${SSH_PK_PASSWD}")
     [[ -n "${PORT}" ]] && sealos_cmd+=(--port "${PORT}")
 
     if [[ "${AUTO_YES}" == "true" && "${FORCE}" != "true" ]]; then

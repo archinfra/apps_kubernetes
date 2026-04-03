@@ -26,6 +26,7 @@ SSH_PK_PASSWD=""
 PORT="22"
 DATA_ROOT="/data"
 CRI_DATA="/data/containerd"
+CNI_HELM_OPTS=""
 
 SEALOS_VERSION=""
 IMAGE_REGISTRY=""
@@ -79,37 +80,38 @@ die() {
 
 usage() {
   cat <<'EOF'
-Usage:
-  ./installer.run install|reset|precheck|show-defaults [options] [-- <extra sealos args>]
+用法:
+  ./installer.run install|reset|precheck|show-defaults [选项] [-- <额外 sealos 参数>]
 
-Commands:
-  install             Install a Kubernetes cluster
-  reset               Reset a Kubernetes cluster
-  precheck            Validate package contents and local runtime prerequisites
-  show-defaults       Print bundled defaults
+命令:
+  install                     安装 Kubernetes 集群
+  reset                       重置 Kubernetes 集群
+  precheck                    只做预检查，不实际安装
+  show-defaults               显示安装包内置默认值
 
-Options:
-  --masters <ip,ip>           Comma-separated master node IPs
-  --nodes <ip,ip>             Comma-separated worker node IPs
-  --user <username>           SSH username
-  --passwd <password>         SSH password
-  --pk <path>                 SSH private key path
-  --pk-passwd <password>      SSH private key passphrase
-  --port <port>               SSH port, default: 22
-  --data-root <path>          Sealos data root, default: /data
-  --cri-data <path>           Container runtime data root, default: /data/containerd
-  --registry <registry>       Override image registry prefix
-  --k8s-version <tag>         Override Kubernetes image tag
-  --helm-version <tag>        Override Helm image tag
-  --cni-version <tag>         Override Cilium image tag
-  --skip-image-load           Skip local image import
-  --skip-binary-install       Skip installing Sealos binaries
-  --skip-precheck             Skip local precheck
-  --dry-run                   Print the sealos command without executing it
-  --force                     Pass --force to sealos and skip confirmation
-  --debug                     Pass --debug to sealos and enable shell tracing
-  -y, --yes                   Auto confirm prompts
-  -h, --help                  Show help
+常用选项:
+  --masters <ip,ip>           主节点 IP 列表，逗号分隔
+  --nodes <ip,ip>             工作节点 IP 列表，逗号分隔
+  --user <username>           SSH 用户名
+  --passwd <password>         SSH 密码
+  --pk <path>                 SSH 私钥路径
+  --pk-passwd <password>      SSH 私钥口令
+  --port <port>               SSH 端口，默认 22
+  --data-root <path>          Sealos 数据目录，默认 /data
+  --cri-data <path>           容器运行时数据目录，默认 /data/containerd
+  --cni-helm-opts <args>      额外传给 Cilium Helm 的参数
+  --registry <registry>       覆盖默认镜像仓库前缀
+  --k8s-version <tag>         临时覆盖 Kubernetes 镜像 tag
+  --helm-version <tag>        临时覆盖 Helm 镜像 tag
+  --cni-version <tag>         临时覆盖 Cilium 镜像 tag
+  --skip-image-load           跳过本地镜像导入
+  --skip-binary-install       跳过安装 Sealos 二进制
+  --skip-precheck             跳过预检查
+  --dry-run                   只打印最终 sealos 命令，不实际执行
+  --force                     透传 --force 给 sealos，并跳过确认
+  --debug                     打开调试输出
+  -y, --yes                   自动确认
+  -h, --help                  显示帮助
 EOF
 }
 
@@ -119,6 +121,58 @@ refresh_runtime_values() {
   K8S_IMAGE="${IMAGE_REGISTRY}/${K8S_IMAGE_NAME}:${K8S_VERSION}"
   HELM_IMAGE="${IMAGE_REGISTRY}/${HELM_IMAGE_NAME}:${HELM_VERSION}"
   CNI_IMAGE="${IMAGE_REGISTRY}/${CNI_IMAGE_NAME}:${CNI_VERSION}"
+}
+
+normalize_semver() {
+  local version="${1#v}"
+  local core="${version%%[-+]*}"
+  local major minor patch
+
+  IFS='.' read -r major minor patch <<<"${core}"
+  major="${major:-0}"
+  minor="${minor:-0}"
+  patch="${patch:-0}"
+
+  printf '%03d%03d%03d\n' "${major}" "${minor}" "${patch}"
+}
+
+version_ge() {
+  [[ "$(normalize_semver "$1")" -ge "$(normalize_semver "$2")" ]]
+}
+
+sealos_extra_contains_env() {
+  local key="$1"
+  local i arg next
+
+  for ((i = 0; i < ${#SEALOS_EXTRA_ARGS[@]}; i++)); do
+    arg="${SEALOS_EXTRA_ARGS[i]}"
+    next="${SEALOS_EXTRA_ARGS[i+1]:-}"
+
+    case "${arg}" in
+      -e|--env)
+        [[ "${next}" == "${key}"=* ]] && return 0
+        ;;
+      -e${key}=*|--env=${key}=*)
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+resolve_cni_helm_opts() {
+  if [[ -n "${CNI_HELM_OPTS}" ]]; then
+    return
+  fi
+
+  if sealos_extra_contains_env "ExtraValues" || sealos_extra_contains_env "HELM_OPTS"; then
+    return
+  fi
+
+  if [[ "${CNI_IMAGE_NAME}" == "cilium" ]] && version_ge "${CNI_VERSION}" "1.18.0"; then
+    CNI_HELM_OPTS="--set kubeProxyReplacement=false"
+  fi
 }
 
 load_runtime_metadata() {
@@ -149,6 +203,7 @@ load_runtime_metadata() {
   done
 
   refresh_runtime_values
+  resolve_cni_helm_opts
 }
 
 load_show_defaults_metadata() {
@@ -170,6 +225,7 @@ load_show_defaults_metadata() {
   fi
 
   refresh_runtime_values
+  resolve_cni_helm_opts
 }
 
 parse_args() {
@@ -218,6 +274,10 @@ parse_args() {
         ;;
       --cri-data|--criData)
         CRI_DATA="$2"
+        shift 2
+        ;;
+      --cni-helm-opts)
+        CNI_HELM_OPTS="$2"
         shift 2
         ;;
       --registry)
@@ -338,6 +398,7 @@ defaults:
   data-root:      ${DATA_ROOT}
   cri-data:       ${CRI_DATA}
   ssh-port:       ${PORT}
+  cni-helm-opts:  ${CNI_HELM_OPTS:-<none>}
 EOF
 }
 
@@ -378,6 +439,7 @@ sshPort:           ${PORT}
 sshKey:            ${SSH_PK:-<default ~/.ssh/id_rsa>}
 dataRoot:          ${DATA_ROOT}
 criData:           ${CRI_DATA}
+cniHelmOpts:       ${CNI_HELM_OPTS:-<none>}
 packageVariant:    ${PACKAGE_VARIANT}
 includeImages:     ${INCLUDE_IMAGES}
 sealosVersion:     ${SEALOS_VERSION}
@@ -464,6 +526,7 @@ export SEALOS_SCP_CHECKSUM="false"
 export SEALOS_REGISTRY_SKIP_TLS="true"
 export DATA_ROOT="${DATA_ROOT}"
 export CRI_DATA="${CRI_DATA}"
+export CNI_HELM_OPTS="${CNI_HELM_OPTS}"
 export MASTERS="${MASTERS}"
 export NODES="${NODES}"
 export SSH_USER="${SSH_USER}"
@@ -495,6 +558,11 @@ run_sealos() {
     [[ -n "${SSH_PK_PASSWD}" ]] && sealos_cmd+=(--pk-passwd "${SSH_PK_PASSWD}")
     [[ -n "${PORT}" ]] && sealos_cmd+=(--port "${PORT}")
     sealos_cmd+=(-e "criData=${CRI_DATA}")
+    if [[ -n "${CNI_HELM_OPTS}" ]]; then
+      log "Applying Cilium Helm options: ${CNI_HELM_OPTS}"
+      sealos_cmd+=(-e "ExtraValues=${CNI_HELM_OPTS}")
+      sealos_cmd+=(-e "HELM_OPTS=${CNI_HELM_OPTS}")
+    fi
   else
     sealos_cmd=(sealos reset)
     sealos_cmd+=(--masters "${MASTERS}")

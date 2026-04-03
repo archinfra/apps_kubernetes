@@ -251,6 +251,15 @@ chmod +x build.sh install.sh
 ./install.sh show-defaults
 ```
 
+查看帮助时：
+
+```bash
+./install.sh -h
+./k8s-sealos-linux-amd64-full.run -h
+```
+
+现在都会走快速帮助路径，不会先解压整个 `.run` 包。
+
 查看指定架构的默认值也可以：
 
 ```bash
@@ -326,6 +335,8 @@ chmod +x build.sh install.sh
   - Sealos 数据目录，默认 `/data`
 - `--cri-data`
   - 容器运行时数据目录，默认 `/data/containerd`
+- `--cni-helm-opts`
+  - 额外传给 Cilium Helm 安装器的参数
 - `--registry`
   - 覆盖默认镜像仓库前缀
 - `--k8s-version`
@@ -371,6 +382,36 @@ ssh: handshake failed: ssh: unable to authenticate, attempted methods [none]
 ```
 
 通常不是网络不通，而是当前执行节点没有把正确的 SSH 认证方式传给 `sealos`。
+
+## Cilium 1.18 兼容说明
+
+`Cilium 1.18.x` 的 Helm chart 要求 `kubeProxyReplacement` 必须显式设置为 `true` 或 `false`。
+
+而当前这套 `kubernetes-docker` 方案默认仍然包含 `kube-proxy`，所以更合适的默认值是：
+
+```bash
+--set kubeProxyReplacement=false
+```
+
+脚本里已经按这个部署方案补了默认兼容值。
+
+也就是说，默认情况下你不需要手工再写这一项，脚本会自动补：
+
+```bash
+--set kubeProxyReplacement=false
+```
+
+如果你后续想手工覆盖，也可以显式传入：
+
+```bash
+--cni-helm-opts "--set kubeProxyReplacement=false"
+```
+
+或者透传给 `sealos`：
+
+```bash
+-- -e "ExtraValues=--set kubeProxyReplacement=false"
+```
 
 ## 运行后的环境文件
 

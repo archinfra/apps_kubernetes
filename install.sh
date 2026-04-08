@@ -70,7 +70,7 @@ SSH 参数:
   --nodes <ip,ip>             工作节点 IP 列表，逗号分隔
   --data-root <path>          Sealos 数据目录，默认 /data
   --cri-data <path>           容器运行时数据目录，默认 /data/containerd
-  --cni-helm-opts <args>      额外传给 Cilium Helm 的参数
+  --cni-helm-opts <args>      额外传给 Cilium 的 ExtraValues 值
   --registry <registry>       覆盖默认镜像仓库前缀
   --k8s-version <tag>         临时覆盖 Kubernetes 镜像 tag
   --helm-version <tag>        临时覆盖 Helm 镜像 tag
@@ -112,9 +112,9 @@ SSH 参数:
   - 帮助路径是秒开的，不会先解压整个 .run 安装包。
   - 真正执行 install/reset/precheck 时，安装包才会开始解压 payload。
   - full 全离线包体积更大，解压会比 lite 半离线包慢一些。
-  - 当前脚本会对 Cilium 1.18+ 默认补充:
-      --set kubeProxyReplacement=false
-    这是为了兼容 kube-proxy 已存在的 Kubernetes-Docker 部署方式。
+  - 当前默认使用 Cilium 1.18.1。
+  - 安装命令默认会附加:
+      -e ExtraValues=kubeProxyReplacement=false
 EOF
 }
 
@@ -142,7 +142,7 @@ bootstrap_payload() {
 if wants_fast_help "$@"; then
   show_fast_help
   exit 0
-}
+fi
 
 if [[ -f "${COMMON_DIR}/install-common.sh" && -f "${SCRIPT_DIR}/versions.env" ]]; then
   export K8S_SEALOS_CONTEXT_DIR="${SCRIPT_DIR}"

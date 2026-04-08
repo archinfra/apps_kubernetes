@@ -99,7 +99,7 @@ usage() {
   --port <port>               SSH 端口，默认 22
   --data-root <path>          Sealos 数据目录，默认 /data
   --cri-data <path>           容器运行时数据目录，默认 /data/containerd
-  --cni-helm-opts <args>      额外传给 Cilium Helm 的参数
+  --cni-helm-opts <args>      额外传给 Cilium 的 ExtraValues 值
   --registry <registry>       覆盖默认镜像仓库前缀
   --k8s-version <tag>         临时覆盖 Kubernetes 镜像 tag
   --helm-version <tag>        临时覆盖 Helm 镜像 tag
@@ -137,7 +137,11 @@ normalize_semver() {
 }
 
 version_ge() {
-  [[ "$(normalize_semver "$1")" -ge "$(normalize_semver "$2")" ]]
+  local left right
+
+  left="$(normalize_semver "$1")"
+  right="$(normalize_semver "$2")"
+  (( 10#"${left}" >= 10#"${right}" ))
 }
 
 sealos_extra_contains_env() {
@@ -163,16 +167,18 @@ sealos_extra_contains_env() {
 
 resolve_cni_helm_opts() {
   if [[ -n "${CNI_HELM_OPTS}" ]]; then
-    return
+    return 0
   fi
 
-  if sealos_extra_contains_env "ExtraValues" || sealos_extra_contains_env "HELM_OPTS"; then
-    return
+  if sealos_extra_contains_env "ExtraValues"; then
+    return 0
   fi
 
   if [[ "${CNI_IMAGE_NAME}" == "cilium" ]] && version_ge "${CNI_VERSION}" "1.18.0"; then
-    CNI_HELM_OPTS="--set kubeProxyReplacement=false"
+    CNI_HELM_OPTS="kubeProxyReplacement=false"
   fi
+
+  return 0
 }
 
 load_runtime_metadata() {
@@ -559,9 +565,8 @@ run_sealos() {
     [[ -n "${PORT}" ]] && sealos_cmd+=(--port "${PORT}")
     sealos_cmd+=(-e "criData=${CRI_DATA}")
     if [[ -n "${CNI_HELM_OPTS}" ]]; then
-      log "Applying Cilium Helm options: ${CNI_HELM_OPTS}"
+      log "Applying Cilium ExtraValues: ${CNI_HELM_OPTS}"
       sealos_cmd+=(-e "ExtraValues=${CNI_HELM_OPTS}")
-      sealos_cmd+=(-e "HELM_OPTS=${CNI_HELM_OPTS}")
     fi
   else
     sealos_cmd=(sealos reset)

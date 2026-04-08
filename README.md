@@ -228,6 +228,64 @@ chmod +x build.sh install.sh
 ./build.sh --arch amd64 --bundle full --skip-binary-download --skip-image-prepare
 ```
 
+### 使用本地 Sealos 安装包构建
+
+如果构建机访问 GitHub 很慢，可以直接复用本地已经准备好的 Sealos 压缩包：
+
+```bash
+./build.sh \
+  --arch amd64 \
+  --bundle full \
+  --sealos-archive-file /data/pkg/sealos_5.1.1_linux_amd64.tar.gz \
+  --force
+```
+
+如果一个目录里已经放好了不同架构的压缩包：
+
+```bash
+./build.sh \
+  --arch all \
+  --bundle lite \
+  --sealos-archive-dir /data/pkg/sealos \
+  --force
+```
+
+目录里的文件名需要保持为：
+
+```text
+sealos_5.1.1_linux_amd64.tar.gz
+sealos_5.1.1_linux_arm64.tar.gz
+```
+
+### 使用自定义下载地址构建
+
+如果你已经把 Sealos 压缩包放到了内网 HTTP/HTTPS 地址，可以直接指定：
+
+```bash
+./build.sh \
+  --arch amd64 \
+  --bundle full \
+  --sealos-archive-url http://your-mirror/sealos_5.1.1_linux_amd64.tar.gz \
+  --force
+```
+
+或者给一个统一前缀地址：
+
+```bash
+./build.sh \
+  --arch all \
+  --bundle lite \
+  --sealos-download-base http://your-mirror/sealos \
+  --force
+```
+
+这时脚本会自动拼接：
+
+```text
+http://your-mirror/sealos/sealos_5.1.1_linux_amd64.tar.gz
+http://your-mirror/sealos/sealos_5.1.1_linux_arm64.tar.gz
+```
+
 参数说明：
 
 - `--arch <amd64|arm64|all>`
@@ -238,6 +296,14 @@ chmod +x build.sh install.sh
   - 跳过 Sealos 二进制下载，直接复用缓存
 - `--skip-image-prepare`
   - 跳过镜像拉取和保存，直接复用缓存
+- `--sealos-archive-file <path>`
+  - 指定单个本地 Sealos 压缩包
+- `--sealos-archive-dir <dir>`
+  - 指定本地 Sealos 压缩包目录
+- `--sealos-archive-url <url>`
+  - 指定单个 Sealos 压缩包下载地址
+- `--sealos-download-base <url>`
+  - 指定 Sealos 压缩包统一下载前缀
 - `--force`
   - 强制重新准备缓存
 - `--clean`
@@ -336,7 +402,7 @@ chmod +x build.sh install.sh
 - `--cri-data`
   - 容器运行时数据目录，默认 `/data/containerd`
 - `--cni-helm-opts`
-  - 额外传给 Cilium Helm 安装器的参数
+  - 额外传给 Cilium 的 `ExtraValues` 值
 - `--registry`
   - 覆盖默认镜像仓库前缀
 - `--k8s-version`
@@ -383,34 +449,38 @@ ssh: handshake failed: ssh: unable to authenticate, attempted methods [none]
 
 通常不是网络不通，而是当前执行节点没有把正确的 SSH 认证方式传给 `sealos`。
 
-## Cilium 1.18 兼容说明
+## Cilium 1.18 默认参数说明
 
-`Cilium 1.18.x` 的 Helm chart 要求 `kubeProxyReplacement` 必须显式设置为 `true` 或 `false`。
+当前默认版本恢复为 `Cilium 1.18.1`。
 
-而当前这套 `kubernetes-docker` 方案默认仍然包含 `kube-proxy`，所以更合适的默认值是：
+结合现场验证，当前这套 `sealos run kubernetes-docker helm cilium` 方案里，对 `labring/cilium:1.18.1` 生效的参数形式是：
 
 ```bash
---set kubeProxyReplacement=false
+-e ExtraValues="kubeProxyReplacement=false"
 ```
 
-脚本里已经按这个部署方案补了默认兼容值。
-
-也就是说，默认情况下你不需要手工再写这一项，脚本会自动补：
+而不是：
 
 ```bash
---set kubeProxyReplacement=false
+-e ExtraValues="--set kubeProxyReplacement=false"
 ```
 
-如果你后续想手工覆盖，也可以显式传入：
+也不再默认传：
 
 ```bash
---cni-helm-opts "--set kubeProxyReplacement=false"
+-e HELM_OPTS=...
 ```
 
-或者透传给 `sealos`：
+因此现在原版安装脚本的默认行为是：
+
+- 默认直接使用 `1.18.1`
+- 默认自动附加 `ExtraValues=kubeProxyReplacement=false`
+- 默认不再附加 `HELM_OPTS`
+
+如果你要手工覆盖，也建议按这个格式传：
 
 ```bash
--- -e "ExtraValues=--set kubeProxyReplacement=false"
+-- -e ExtraValues="kubeProxyReplacement=false"
 ```
 
 ## 运行后的环境文件

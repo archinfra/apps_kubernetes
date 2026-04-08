@@ -8,7 +8,23 @@ on:
       - master
     tags:
       - "v*"
+    paths:
+      - ".github/workflows/build-k8s-offline.yml"
+      - ".gitignore"
+      - "README.md"
+      - "build.sh"
+      - "install.sh"
+      - "versions.env"
+      - "common/**"
   pull_request:
+    paths:
+      - ".github/workflows/build-k8s-offline.yml"
+      - ".gitignore"
+      - "README.md"
+      - "build.sh"
+      - "install.sh"
+      - "versions.env"
+      - "common/**"
 
 permissions:
   contents: write
@@ -46,7 +62,7 @@ jobs:
         run: |
           ./build.sh --arch "${{ matrix.arch }}" --bundle "${{ matrix.bundle }}" --force
 
-      - name: Upload workflow artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: k8s-sealos-${{ matrix.arch }}-${{ matrix.bundle }}

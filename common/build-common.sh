@@ -23,6 +23,10 @@ DOWNLOAD_BINARIES="true"
 PREPARE_IMAGES="true"
 FORCE="false"
 CLEAN_ONLY="false"
+SEALOS_ARCHIVE_FILE="${SEALOS_ARCHIVE_FILE:-}"
+SEALOS_ARCHIVE_DIR="${SEALOS_ARCHIVE_DIR:-}"
+SEALOS_ARCHIVE_URL="${SEALOS_ARCHIVE_URL:-}"
+SEALOS_DOWNLOAD_BASE_URL="${SEALOS_DOWNLOAD_BASE_URL:-}"
 
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -52,6 +56,10 @@ Options:
   --bundle <full|lite|all>    Package variant, default: all
   --skip-binary-download      Reuse cached Sealos binaries
   --skip-image-prepare        Reuse cached image tar files for full bundles
+  --sealos-archive-file <p>   Use one pre-downloaded Sealos archive file
+  --sealos-archive-dir <dir>  Use pre-downloaded Sealos archives from a directory
+  --sealos-archive-url <url>  Download one Sealos archive from a custom URL
+  --sealos-download-base <u>  Download Sealos archives from a custom base URL
   --force                     Refresh binaries and image tar files
   --clean                     Remove .build and dist, then exit
   -h, --help                  Show help
@@ -59,6 +67,14 @@ Options:
 Package variants:
   full  Includes Sealos binaries and offline image tar files
   lite  Includes Sealos binaries only, no image tar files
+
+Sealos source overrides:
+  The build first reuses .cache/downloads when available. If a refresh is needed,
+  you can override the default GitHub release source with one of:
+    --sealos-archive-file  /data/pkg/sealos_5.1.1_linux_amd64.tar.gz
+    --sealos-archive-dir   /data/pkg/sealos/
+    --sealos-archive-url   https://mirror.example.com/sealos_5.1.1_linux_amd64.tar.gz
+    --sealos-download-base https://mirror.example.com/sealos
 EOF
 }
 
@@ -80,6 +96,22 @@ parse_args() {
       --skip-image-prepare)
         PREPARE_IMAGES="false"
         shift
+        ;;
+      --sealos-archive-file)
+        SEALOS_ARCHIVE_FILE="$2"
+        shift 2
+        ;;
+      --sealos-archive-dir)
+        SEALOS_ARCHIVE_DIR="$2"
+        shift 2
+        ;;
+      --sealos-archive-url)
+        SEALOS_ARCHIVE_URL="$2"
+        shift 2
+        ;;
+      --sealos-download-base)
+        SEALOS_DOWNLOAD_BASE_URL="$2"
+        shift 2
         ;;
       --force)
         FORCE="true"
@@ -202,6 +234,33 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing command: $1"
 }
 
+copy_local_sealos_archive() {
+  local src_path="$1"
+  local archive_path="$2"
+
+  [[ -f "${src_path}" ]] || die "Sealos archive not found: ${src_path}"
+
+  if [[ "${src_path}" != "${archive_path}" ]]; then
+    cp -f "${src_path}" "${archive_path}"
+  fi
+}
+
+resolve_sealos_archive_url() {
+  local archive_name="$1"
+
+  if [[ -n "${SEALOS_ARCHIVE_URL}" ]]; then
+    printf '%s\n' "${SEALOS_ARCHIVE_URL}"
+    return 0
+  fi
+
+  if [[ -n "${SEALOS_DOWNLOAD_BASE_URL}" ]]; then
+    printf '%s/%s\n' "${SEALOS_DOWNLOAD_BASE_URL%/}" "${archive_name}"
+    return 0
+  fi
+
+  printf 'https://github.com/labring/sealos/releases/download/%s/%s\n' "${SEALOS_VERSION}" "${archive_name}"
+}
+
 needs_docker() {
   local bundle
 
@@ -244,11 +303,16 @@ refresh_image_refs() {
   K8S_IMAGE="${IMAGE_REGISTRY}/${K8S_IMAGE_NAME}:${K8S_VERSION}"
   HELM_IMAGE="${IMAGE_REGISTRY}/${HELM_IMAGE_NAME}:${HELM_VERSION}"
   CNI_IMAGE="${IMAGE_REGISTRY}/${CNI_IMAGE_NAME}:${CNI_VERSION}"
+  K8S_CACHE_TAR="${K8S_IMAGE_NAME}_${K8S_VERSION}_${ARCH}.tar"
+  HELM_CACHE_TAR="${HELM_IMAGE_NAME}_${HELM_VERSION}_${ARCH}.tar"
+  CNI_CACHE_TAR="${CNI_IMAGE_NAME}_${CNI_VERSION}_${ARCH}.tar"
 }
 
 download_sealos_binaries() {
   local archive_name
   local archive_path
+  local archive_url
+  local source_path
 
   archive_name="sealos_${SEALOS_VERSION#v}_linux_${ARCH}.tar.gz"
   archive_path="${DOWNLOAD_CACHE_DIR}/${archive_name}"
@@ -262,10 +326,26 @@ download_sealos_binaries() {
     return
   fi
 
-  log "Downloading Sealos release for ${ARCH}"
-  curl -fL --retry 3 --retry-delay 2 \
-    -o "${archive_path}" \
-    "https://github.com/labring/sealos/releases/download/${SEALOS_VERSION}/${archive_name}"
+  if [[ -n "${SEALOS_ARCHIVE_FILE}" ]]; then
+    log "Using local Sealos archive file for ${ARCH}: ${SEALOS_ARCHIVE_FILE}"
+    copy_local_sealos_archive "${SEALOS_ARCHIVE_FILE}" "${archive_path}"
+  elif [[ -n "${SEALOS_ARCHIVE_DIR}" ]]; then
+    source_path="${SEALOS_ARCHIVE_DIR%/}/${archive_name}"
+    log "Using local Sealos archive from directory for ${ARCH}: ${source_path}"
+    copy_local_sealos_archive "${source_path}" "${archive_path}"
+  else
+    archive_url="$(resolve_sealos_archive_url "${archive_name}")"
+
+    if [[ -n "${SEALOS_ARCHIVE_URL}" || -n "${SEALOS_DOWNLOAD_BASE_URL}" ]]; then
+      log "Downloading Sealos archive for ${ARCH} from custom source"
+    else
+      log "Downloading Sealos release for ${ARCH}"
+    fi
+
+    curl -fL --retry 3 --retry-delay 2 \
+      -o "${archive_path}" \
+      "${archive_url}"
+  fi
 
   rm -rf "${BINARY_CACHE_DIR}"
   mkdir -p "${BINARY_CACHE_DIR}"
@@ -279,8 +359,8 @@ download_sealos_binaries() {
 
 ensure_cached_image() {
   local image_ref="$1"
-  local tar_name="$2"
-  local tar_path="${IMAGE_CACHE_DIR}/${tar_name}"
+  local cache_tar_name="$2"
+  local tar_path="${IMAGE_CACHE_DIR}/${cache_tar_name}"
 
   if [[ "${PREPARE_IMAGES}" == "false" ]]; then
     [[ -f "${tar_path}" ]] || die "Missing cached image tar for ${ARCH}: ${tar_path}"
@@ -288,21 +368,21 @@ ensure_cached_image() {
   fi
 
   if [[ "${FORCE}" == "false" && -f "${tar_path}" ]]; then
-    log "Using cached image tar ${tar_name} for ${ARCH}"
+    log "Using cached image tar ${cache_tar_name} for ${ARCH}"
     return
   fi
 
   log "Pulling ${image_ref} for ${PLATFORM}"
   docker pull --platform "${PLATFORM}" "${image_ref}"
 
-  log "Saving ${tar_name}"
+  log "Saving ${cache_tar_name}"
   docker save -o "${tar_path}" "${image_ref}"
 }
 
 prepare_images() {
-  ensure_cached_image "${CNI_IMAGE}" "${CNI_IMAGE_TAR}"
-  ensure_cached_image "${HELM_IMAGE}" "${HELM_IMAGE_TAR}"
-  ensure_cached_image "${K8S_IMAGE}" "${K8S_IMAGE_TAR}"
+  ensure_cached_image "${CNI_IMAGE}" "${CNI_CACHE_TAR}"
+  ensure_cached_image "${HELM_IMAGE}" "${HELM_CACHE_TAR}"
+  ensure_cached_image "${K8S_IMAGE}" "${K8S_CACHE_TAR}"
 }
 
 write_image_manifest() {
@@ -394,9 +474,9 @@ stage_payload() {
   cp -f "${INSTALL_COMMON_FILE}" "${PAYLOAD_LIB_DIR}/install-common.sh"
 
   if [[ "${INCLUDE_IMAGES}" == "true" ]]; then
-    cp -f "${IMAGE_CACHE_DIR}/${CNI_IMAGE_TAR}" "${PAYLOAD_IMAGE_DIR}/"
-    cp -f "${IMAGE_CACHE_DIR}/${HELM_IMAGE_TAR}" "${PAYLOAD_IMAGE_DIR}/"
-    cp -f "${IMAGE_CACHE_DIR}/${K8S_IMAGE_TAR}" "${PAYLOAD_IMAGE_DIR}/"
+    cp -f "${IMAGE_CACHE_DIR}/${CNI_CACHE_TAR}" "${PAYLOAD_IMAGE_DIR}/${CNI_IMAGE_TAR}"
+    cp -f "${IMAGE_CACHE_DIR}/${HELM_CACHE_TAR}" "${PAYLOAD_IMAGE_DIR}/${HELM_IMAGE_TAR}"
+    cp -f "${IMAGE_CACHE_DIR}/${K8S_CACHE_TAR}" "${PAYLOAD_IMAGE_DIR}/${K8S_IMAGE_TAR}"
   fi
 }
 

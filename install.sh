@@ -47,73 +47,53 @@ wants_fast_help() {
 
 show_fast_help() {
   cat <<'EOF'
-OneKube Kubernetes 离线安装包
+OneKube Kubernetes Offline Installer
 
-用法:
-  ./k8s-sealos-linux-<arch>-<bundle>.run install|reset|precheck|show-defaults [选项] [-- <额外 sealos 参数>]
+Usage:
+  ./k8s-sealos-linux-<arch>-<bundle>.run install|reset|precheck|show-defaults [options] [-- <extra sealos args>]
 
-命令说明:
-  install                     安装 Kubernetes 集群
-  reset                       重置 Kubernetes 集群
-  precheck                    只执行预检查，不真正安装
-  show-defaults               查看安装包内置默认值
+Commands:
+  install                     Install Kubernetes cluster
+  reset                       Reset Kubernetes cluster
+  precheck                    Run prechecks only
+  show-defaults               Show built-in defaults
 
-SSH 参数:
-  --user <username>           SSH 用户名
-  --passwd <password>         SSH 密码
-  --pk <path>                 SSH 私钥路径
-  --pk-passwd <password>      SSH 私钥口令
-  --port <port>               SSH 端口，默认 22
+SSH Options:
+  --user <username>           SSH username
+  --passwd <password>         SSH password
+  --pk <path>                 SSH private key path
+  --pk-passwd <password>      SSH private key passphrase
+  --port <port>               SSH port, default: 22
 
-安装参数:
-  --masters <ip,ip>           主节点 IP 列表，逗号分隔
-  --nodes <ip,ip>             工作节点 IP 列表，逗号分隔
-  --data-root <path>          Sealos 数据目录，默认 /data
-  --cri-data <path>           容器运行时数据目录，默认 /data/containerd
-  --cni-helm-opts <args>      额外传给 Cilium 的 ExtraValues 值
-  --registry <registry>       覆盖默认镜像仓库前缀
-  --k8s-version <tag>         临时覆盖 Kubernetes 镜像 tag
-  --helm-version <tag>        临时覆盖 Helm 镜像 tag
-  --cni-version <tag>         临时覆盖 Cilium 镜像 tag
-  --skip-image-load           跳过本地镜像导入
-  --skip-binary-install       跳过安装 Sealos 二进制
-  --skip-precheck             跳过预检查
-  --dry-run                   只打印最终 sealos 命令，不实际执行
-  --force                     透传 --force 给 sealos，并跳过确认
-  --debug                     打开调试输出
-  -y, --yes                   自动确认
-  -h, --help                  显示帮助
+Install Options:
+  --masters <ip,ip>           Master node IP list
+  --nodes <ip,ip>             Worker node IP list
+  --data-root <path>          Sealos data root, default: /data
+  --cri-data <path>           Container runtime data root, default: /data/containerd
+  --cni-helm-opts <args>      Extra Cilium ExtraValues value
+  --registry <registry>       Override image registry prefix
+  --k8s-version <tag>         Override Kubernetes image tag
+  --helm-version <tag>        Override Helm image tag
+  --cni-version <tag>         Override Cilium image tag
+  --skip-image-load           Skip local image load
+  --skip-binary-install       Skip Sealos binary install
+  --skip-precheck             Skip prechecks
+  --dry-run                   Print final sealos command only
+  --force                     Pass --force to sealos and skip confirm
+  --debug                     Enable debug output
+  -y, --yes                   Auto confirm
+  -h, --help                  Show help
 
-推荐用法:
-  1. 密码登录安装
-     ./k8s-sealos-linux-amd64-full.run install \
-       --masters 10.0.0.11 \
-       --nodes 10.0.0.21 \
-       --passwd 'your-password' \
-       --yes
+Examples:
+  ./k8s-sealos-linux-amd64-full.run install --masters 10.0.0.11 --nodes 10.0.0.21 --passwd 'your-password' --yes
+  ./k8s-sealos-linux-amd64-full.run install --masters 10.0.0.11 --nodes 10.0.0.21 --user root --pk /root/.ssh/id_rsa --yes
+  ./k8s-sealos-linux-amd64-full.run precheck --masters 10.0.0.11 --nodes 10.0.0.21 --user root --pk /root/.ssh/id_rsa --yes
 
-  2. 私钥免密安装
-     ./k8s-sealos-linux-amd64-full.run install \
-       --masters 10.0.0.11 \
-       --nodes 10.0.0.21 \
-       --user root \
-       --pk /root/.ssh/id_rsa \
-       --yes
-
-  3. 先做预检查
-     ./k8s-sealos-linux-amd64-full.run precheck \
-       --masters 10.0.0.11 \
-       --nodes 10.0.0.21 \
-       --user root \
-       --pk /root/.ssh/id_rsa \
-       --yes
-
-重要说明:
-  - 帮助路径是秒开的，不会先解压整个 .run 安装包。
-  - 真正执行 install/reset/precheck 时，安装包才会开始解压 payload。
-  - full 全离线包体积更大，解压会比 lite 半离线包慢一些。
-  - 当前默认使用 Cilium 1.18.1。
-  - 安装命令默认会附加:
+Notes:
+  - Help mode is fast and does not extract the full package.
+  - Runtime actions extract payload only when needed.
+  - Default Cilium version is 1.18.1.
+  - Default install adds:
       -e ExtraValues=kubeProxyReplacement=false
 EOF
 }

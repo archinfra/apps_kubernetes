@@ -41,6 +41,12 @@ jobs:
         bundle:
           - full
           - lite
+        cni:
+          - ''          # 默认 cilium
+          - calico
+        exclude:
+          - bundle: lite
+            cni: calico  # lite 包不构建 calico 变体
 
     steps:
       - name: Checkout
@@ -50,9 +56,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .cache/downloads
-          key: sealos-downloads-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('common/component-versions.env') }}
+          key: sealos-downloads-${{ runner.os }}-${{ matrix.arch }}-${{ matrix.cni }}-${{ hashFiles('common/component-versions.env') }}
           restore-keys: |
-            sealos-downloads-${{ runner.os }}-${{ matrix.arch }}-
+            sealos-downloads-${{ runner.os }}-${{ matrix.arch }}-${{ matrix.cni }}-
 
       - name: Ensure executable permissions
         run: |
@@ -60,15 +66,16 @@ jobs:
 
       - name: Build package
         run: |
-          ./build.sh --arch "${{ matrix.arch }}" --bundle "${{ matrix.bundle }}" --force
+          ./build.sh --arch "${{ matrix.arch }}" --bundle "${{ matrix.bundle }}" --force \
+          ${{ matrix.cni != '' && format('--cni {0}', matrix.cni) || '' }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: k8s-sealos-${{ matrix.arch }}-${{ matrix.bundle }}
+          name: k8s-sealos-${{ matrix.arch }}-${{ matrix.bundle }}${{ matrix.cni != '' && format('-{0}', matrix.cni) || '' }}
           path: |
-            dist/k8s-sealos-linux-${{ matrix.arch }}-${{ matrix.bundle }}.run
-            dist/k8s-sealos-linux-${{ matrix.arch }}-${{ matrix.bundle }}.run.sha256
+            dist/k8s-sealos-linux-${{ matrix.arch }}-${{ matrix.bundle }}${{ matrix.cni != '' && format('-{0}', matrix.cni) || '' }}.run
+            dist/k8s-sealos-linux-${{ matrix.arch }}-${{ matrix.bundle }}${{ matrix.cni != '' && format('-{0}', matrix.cni) || '' }}.run.sha256
           if-no-files-found: error
 
   release:

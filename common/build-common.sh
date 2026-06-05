@@ -19,6 +19,7 @@ DIST_DIR="${ROOT_DIR}/dist"
 
 ARCH_SELECTOR="all"
 BUNDLE_SELECTOR="all"
+CNI_SELECTOR="${CNI_PROVIDER:-cilium}"
 DOWNLOAD_BINARIES="true"
 PREPARE_IMAGES="true"
 FORCE="false"
@@ -54,6 +55,7 @@ Usage:
 Options:
   --arch <amd64|arm64|all>    Target architecture, default: all
   --bundle <full|lite|all>    Package variant, default: all
+  --cni <cilium|calico>       CNI package to build, default: cilium
   --skip-binary-download      Reuse cached Sealos binaries
   --skip-image-prepare        Reuse cached image tar files for full bundles
   --sealos-archive-file <p>   Use one pre-downloaded Sealos archive file
@@ -87,6 +89,10 @@ parse_args() {
         ;;
       --bundle)
         BUNDLE_SELECTOR="$2"
+        shift 2
+        ;;
+      --cni)
+        CNI_SELECTOR="$2"
         shift 2
         ;;
       --skip-binary-download)
@@ -140,17 +146,43 @@ load_component_versions() {
   # shellcheck disable=SC1090
   source "${COMPONENT_VERSIONS_FILE}"
 
+  select_cni_provider
+
   : "${SEALOS_VERSION:?SEALOS_VERSION is required}"
   : "${IMAGE_REGISTRY:?IMAGE_REGISTRY is required}"
   : "${K8S_IMAGE_NAME:?K8S_IMAGE_NAME is required}"
   : "${K8S_VERSION:?K8S_VERSION is required}"
   : "${HELM_IMAGE_NAME:?HELM_IMAGE_NAME is required}"
   : "${HELM_VERSION:?HELM_VERSION is required}"
+  : "${CNI_PROVIDER:?CNI_PROVIDER is required}"
+  : "${CNI_IMAGE_REGISTRY:?CNI_IMAGE_REGISTRY is required}"
   : "${CNI_IMAGE_NAME:?CNI_IMAGE_NAME is required}"
   : "${CNI_VERSION:?CNI_VERSION is required}"
   : "${K8S_IMAGE_TAR:?K8S_IMAGE_TAR is required}"
   : "${HELM_IMAGE_TAR:?HELM_IMAGE_TAR is required}"
   : "${CNI_IMAGE_TAR:?CNI_IMAGE_TAR is required}"
+}
+
+select_cni_provider() {
+  case "${CNI_SELECTOR}" in
+    cilium)
+      CNI_PROVIDER="cilium"
+      CNI_IMAGE_REGISTRY="${CILIUM_IMAGE_REGISTRY:-${IMAGE_REGISTRY}}"
+      CNI_IMAGE_NAME="${CILIUM_IMAGE_NAME:-cilium}"
+      CNI_VERSION="${CILIUM_VERSION:-1.18.1}"
+      CNI_IMAGE_TAR="${CILIUM_IMAGE_TAR:-cilium.tar}"
+      ;;
+    calico)
+      CNI_PROVIDER="calico"
+      CNI_IMAGE_REGISTRY="${CALICO_IMAGE_REGISTRY:-registry.cn-shanghai.aliyuncs.com/labring}"
+      CNI_IMAGE_NAME="${CALICO_IMAGE_NAME:-calico}"
+      CNI_VERSION="${CALICO_VERSION:-v3.26.5}"
+      CNI_IMAGE_TAR="${CALICO_IMAGE_TAR:-calico.tar}"
+      ;;
+    *)
+      die "Unsupported CNI selector: ${CNI_SELECTOR}"
+      ;;
+  esac
 }
 
 resolve_arches() {
@@ -215,8 +247,12 @@ set_bundle_context() {
       ;;
   esac
 
-  INSTALLER_NAME="k8s-sealos-linux-${ARCH}-${PACKAGE_VARIANT}.run"
-  BUILD_DIR="${BUILD_ROOT}/${ARCH}/${PACKAGE_VARIANT}"
+  if [[ "${CNI_PROVIDER}" == "cilium" ]]; then
+    INSTALLER_NAME="k8s-sealos-linux-${ARCH}-${PACKAGE_VARIANT}.run"
+  else
+    INSTALLER_NAME="k8s-sealos-linux-${ARCH}-${CNI_PROVIDER}-${PACKAGE_VARIANT}.run"
+  fi
+  BUILD_DIR="${BUILD_ROOT}/${ARCH}/${CNI_PROVIDER}/${PACKAGE_VARIANT}"
   PAYLOAD_DIR="${BUILD_DIR}/payload"
   PAYLOAD_BIN_DIR="${PAYLOAD_DIR}/bin"
   PAYLOAD_IMAGE_DIR="${PAYLOAD_DIR}/images"
@@ -302,7 +338,7 @@ prepare_build_directories() {
 refresh_image_refs() {
   K8S_IMAGE="${IMAGE_REGISTRY}/${K8S_IMAGE_NAME}:${K8S_VERSION}"
   HELM_IMAGE="${IMAGE_REGISTRY}/${HELM_IMAGE_NAME}:${HELM_VERSION}"
-  CNI_IMAGE="${IMAGE_REGISTRY}/${CNI_IMAGE_NAME}:${CNI_VERSION}"
+  CNI_IMAGE="${CNI_IMAGE_REGISTRY}/${CNI_IMAGE_NAME}:${CNI_VERSION}"
   K8S_CACHE_TAR="${K8S_IMAGE_NAME}_${K8S_VERSION}_${ARCH}.tar"
   HELM_CACHE_TAR="${HELM_IMAGE_NAME}_${HELM_VERSION}_${ARCH}.tar"
   CNI_CACHE_TAR="${CNI_IMAGE_NAME}_${CNI_VERSION}_${ARCH}.tar"
@@ -430,6 +466,8 @@ HELM_IMAGE_NAME="${HELM_IMAGE_NAME}"
 HELM_VERSION="${HELM_VERSION}"
 HELM_IMAGE_TAR="${HELM_IMAGE_TAR}"
 CNI_IMAGE_NAME="${CNI_IMAGE_NAME}"
+CNI_PROVIDER="${CNI_PROVIDER}"
+CNI_IMAGE_REGISTRY="${CNI_IMAGE_REGISTRY}"
 CNI_VERSION="${CNI_VERSION}"
 CNI_IMAGE_TAR="${CNI_IMAGE_TAR}"
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -447,6 +485,8 @@ HELM_IMAGE_NAME="${HELM_IMAGE_NAME}"
 HELM_VERSION="${HELM_VERSION}"
 HELM_IMAGE_TAR="${HELM_IMAGE_TAR}"
 CNI_IMAGE_NAME="${CNI_IMAGE_NAME}"
+CNI_PROVIDER="${CNI_PROVIDER}"
+CNI_IMAGE_REGISTRY="${CNI_IMAGE_REGISTRY}"
 CNI_VERSION="${CNI_VERSION}"
 CNI_IMAGE_TAR="${CNI_IMAGE_TAR}"
 ARCH="${ARCH}"
@@ -495,7 +535,7 @@ print_summary() {
   echo "  sealos:        ${SEALOS_VERSION}"
   echo "  kubernetes:    ${K8S_IMAGE}"
   echo "  helm:          ${HELM_IMAGE}"
-  echo "  cilium:        ${CNI_IMAGE}"
+  echo "  cni:           ${CNI_PROVIDER} (${CNI_IMAGE})"
   echo "  package:       ${INSTALLER_PATH}"
   echo "  checksum:      ${CHECKSUM_PATH}"
 }

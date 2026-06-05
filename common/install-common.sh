@@ -34,6 +34,8 @@ K8S_IMAGE_NAME=""
 K8S_VERSION=""
 HELM_IMAGE_NAME=""
 HELM_VERSION=""
+CNI_PROVIDER=""
+CNI_IMAGE_REGISTRY=""
 CNI_IMAGE_NAME=""
 CNI_VERSION=""
 ARCH="${ARCH:-unknown}"
@@ -99,11 +101,11 @@ usage() {
   --port <port>               SSH 端口，默认 22
   --data-root <path>          Sealos 数据目录，默认 /data
   --cri-data <path>           容器运行时数据目录，默认 /data/containerd
-  --cni-helm-opts <args>      额外传给 Cilium 的 ExtraValues 值
-  --registry <registry>       覆盖默认镜像仓库前缀
+  --cni-helm-opts <args>      额外传给当前 CNI 的 ExtraValues 值
+  --registry <registry>       覆盖镜像仓库前缀
   --k8s-version <tag>         临时覆盖 Kubernetes 镜像 tag
   --helm-version <tag>        临时覆盖 Helm 镜像 tag
-  --cni-version <tag>         临时覆盖 Cilium 镜像 tag
+  --cni-version <tag>         临时覆盖当前 CNI 镜像 tag
   --skip-image-load           跳过本地镜像导入
   --skip-binary-install       跳过安装 Sealos 二进制
   --skip-precheck             跳过预检查
@@ -120,7 +122,9 @@ refresh_runtime_values() {
   SEALOS_DATA_ROOT="${DATA_ROOT}/sealos"
   K8S_IMAGE="${IMAGE_REGISTRY}/${K8S_IMAGE_NAME}:${K8S_VERSION}"
   HELM_IMAGE="${IMAGE_REGISTRY}/${HELM_IMAGE_NAME}:${HELM_VERSION}"
-  CNI_IMAGE="${IMAGE_REGISTRY}/${CNI_IMAGE_NAME}:${CNI_VERSION}"
+  CNI_PROVIDER="${CNI_PROVIDER:-${CNI_IMAGE_NAME:-cilium}}"
+  CNI_IMAGE_REGISTRY="${CNI_IMAGE_REGISTRY:-${IMAGE_REGISTRY}}"
+  CNI_IMAGE="${CNI_IMAGE_REGISTRY}/${CNI_IMAGE_NAME}:${CNI_VERSION}"
 }
 
 normalize_semver() {
@@ -174,7 +178,7 @@ resolve_cni_helm_opts() {
     return 0
   fi
 
-  if [[ "${CNI_IMAGE_NAME}" == "cilium" ]] && version_ge "${CNI_VERSION}" "1.18.0"; then
+  if [[ "${CNI_PROVIDER}" == "cilium" && "${CNI_IMAGE_NAME}" == "cilium" ]] && version_ge "${CNI_VERSION}" "1.18.0"; then
     CNI_HELM_OPTS="kubeProxyReplacement=false"
   fi
 
@@ -288,6 +292,7 @@ parse_args() {
         ;;
       --registry)
         IMAGE_REGISTRY="$2"
+        CNI_IMAGE_REGISTRY="$2"
         shift 2
         ;;
       --k8s-version)
@@ -398,7 +403,8 @@ includeImages:    ${INCLUDE_IMAGES}
 sealosVersion:    ${SEALOS_VERSION}
 kubernetesImage:  ${K8S_IMAGE}
 helmImage:        ${HELM_IMAGE}
-ciliumImage:      ${CNI_IMAGE}
+cniProvider:      ${CNI_PROVIDER}
+cniImage:         ${CNI_IMAGE}
 
 defaults:
   data-root:      ${DATA_ROOT}
@@ -451,7 +457,8 @@ includeImages:     ${INCLUDE_IMAGES}
 sealosVersion:     ${SEALOS_VERSION}
 kubernetesImage:   ${K8S_IMAGE}
 helmImage:         ${HELM_IMAGE}
-ciliumImage:       ${CNI_IMAGE}
+cniProvider:       ${CNI_PROVIDER}
+cniImage:          ${CNI_IMAGE}
 skipBinaryInstall: ${SKIP_BINARY_INSTALL}
 skipImageLoad:     ${SKIP_IMAGE_LOAD}
 dryRun:            ${DRY_RUN}
@@ -524,6 +531,8 @@ export K8S_IMAGE_NAME="${K8S_IMAGE_NAME}"
 export K8S_VERSION="${K8S_VERSION}"
 export HELM_IMAGE_NAME="${HELM_IMAGE_NAME}"
 export HELM_VERSION="${HELM_VERSION}"
+export CNI_PROVIDER="${CNI_PROVIDER}"
+export CNI_IMAGE_REGISTRY="${CNI_IMAGE_REGISTRY}"
 export CNI_IMAGE_NAME="${CNI_IMAGE_NAME}"
 export CNI_VERSION="${CNI_VERSION}"
 export SEALOS_RUNTIME_ROOT="${SEALOS_RUNTIME_ROOT}"
@@ -565,7 +574,7 @@ run_sealos() {
     [[ -n "${PORT}" ]] && sealos_cmd+=(--port "${PORT}")
     sealos_cmd+=(-e "criData=${CRI_DATA}")
     if [[ -n "${CNI_HELM_OPTS}" ]]; then
-      log "Applying Cilium ExtraValues: ${CNI_HELM_OPTS}"
+      log "Applying ${CNI_PROVIDER} ExtraValues: ${CNI_HELM_OPTS}"
       sealos_cmd+=(-e "ExtraValues=${CNI_HELM_OPTS}")
     fi
   else

@@ -13,13 +13,14 @@
 
 这次调整主要遵循两条原则：
 
-- 不大改原有部署方案，仍然使用 `sealos run kubernetes-docker helm cilium`
+- 默认不大改原有部署方案，仍然使用 `sealos run kubernetes-docker helm cilium`
+- 新增 `--cni calico` 构建路径，使用 `sealos run kubernetes-docker helm calico`
 - 把公共变量、公共构建逻辑、公共安装逻辑收敛，减少后续版本升级时的重复修改
 
 所以现在保留的核心行为没有变：
 
 - Kubernetes 组件仍然来自 `kubernetes-docker`
-- CNI 仍然使用 `cilium`
+- 默认 CNI 仍然使用 `cilium`；需要 Calico 时构建传 `--cni calico`
 - Helm 仍然作为独立组件随包分发
 - 安装脚本最终还是通过 `sealos` 完成集群安装或重置
 
@@ -37,6 +38,7 @@ common/component-versions.env
 - `kubernetes-docker v1.31.11`
 - `helm v3.19.2`
 - `cilium 1.18.1`
+- `calico v3.26.5` (`registry.cn-shanghai.aliyuncs.com/labring/calico:v3.26.5`)
 
 如果后面只需要升级组件版本，优先改这一个文件即可。
 
@@ -85,6 +87,7 @@ common/component-versions.env
 - `registry.cn-shanghai.aliyuncs.com/labring/kubernetes-docker:<tag>`
 - `registry.cn-shanghai.aliyuncs.com/labring/helm:<tag>`
 - `registry.cn-shanghai.aliyuncs.com/labring/cilium:<tag>`
+- `registry.cn-shanghai.aliyuncs.com/labring/calico:<tag>`
 
 架构差异通过构建阶段处理即可：
 
@@ -107,7 +110,7 @@ docker pull --platform linux/arm64 ...
 - `lvscare`
 - `kubernetes.tar`
 - `helm.tar`
-- `cilium.tar`
+- `cilium.tar` 或 `calico.tar`
 
 适合目标机器无法访问镜像仓库的场景。
 
@@ -133,6 +136,13 @@ dist/k8s-sealos-linux-amd64-full.run
 dist/k8s-sealos-linux-amd64-lite.run
 dist/k8s-sealos-linux-arm64-full.run
 dist/k8s-sealos-linux-arm64-lite.run
+```
+
+如果构建 Calico 包，会额外生成带 `calico` 标识的安装包，例如：
+
+```text
+dist/k8s-sealos-linux-amd64-calico-full.run
+dist/k8s-sealos-linux-amd64-calico-lite.run
 ```
 
 同时每个包都会生成对应校验文件：
@@ -208,6 +218,12 @@ chmod +x build.sh install.sh
 
 ```bash
 ./build.sh --arch amd64 --bundle full --force
+```
+
+构建 `amd64` Calico 全离线包：
+
+```bash
+./build.sh --arch amd64 --bundle full --cni calico --force
 ```
 
 构建 `arm64` 半离线包：
@@ -291,7 +307,10 @@ http://your-mirror/sealos/sealos_5.1.1_linux_arm64.tar.gz
 - `--arch <amd64|arm64|all>`
   - 选择目标架构
 - `--bundle <full|lite|all>`
-  - 选择包型
+  - 选择包类型
+- `--cni <cilium|calico>`
+  - 选择 CNI 包，默认 `cilium`；`calico` 使用 `registry.cn-shanghai.aliyuncs.com/labring/calico:v3.26.5`
+  - Calico 包名会带 `calico` 标识，旧 Cilium 包名保持不变
 - `--skip-binary-download`
   - 跳过 Sealos 二进制下载，直接复用缓存
 - `--skip-image-prepare`
@@ -402,15 +421,15 @@ http://your-mirror/sealos/sealos_5.1.1_linux_arm64.tar.gz
 - `--cri-data`
   - 容器运行时数据目录，默认 `/data/containerd`
 - `--cni-helm-opts`
-  - 额外传给 Cilium 的 `ExtraValues` 值
+  - 额外传给当前 CNI 的 `ExtraValues` 值
 - `--registry`
-  - 覆盖默认镜像仓库前缀
+  - 覆盖镜像仓库前缀
 - `--k8s-version`
   - 临时覆盖 Kubernetes 镜像 tag
 - `--helm-version`
   - 临时覆盖 Helm 镜像 tag
 - `--cni-version`
-  - 临时覆盖 Cilium 镜像 tag
+  - 临时覆盖当前 CNI 镜像 tag
 - `--skip-image-load`
   - 跳过本地导入镜像 tar
 - `--skip-binary-install`
@@ -471,11 +490,13 @@ ssh: handshake failed: ssh: unable to authenticate, attempted methods [none]
 -e HELM_OPTS=...
 ```
 
-因此现在原版安装脚本的默认行为是：
+因此现在 Cilium 包的默认安装行为是：
 
 - 默认直接使用 `1.18.1`
 - 默认自动附加 `ExtraValues=kubeProxyReplacement=false`
 - 默认不再附加 `HELM_OPTS`
+
+Calico 包不会自动附加这类 Cilium 专用 `ExtraValues`。
 
 如果你要手工覆盖，也建议按这个格式传：
 

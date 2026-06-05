@@ -51,6 +51,7 @@ OneKube Kubernetes Offline Installer
 
 Usage:
   ./k8s-sealos-linux-<arch>-<bundle>.run install|reset|precheck|show-defaults [options] [-- <extra sealos args>]
+  ./k8s-sealos-linux-<arch>-calico-<bundle>.run install|reset|precheck|show-defaults [options] [-- <extra sealos args>]
 
 Commands:
   install                     Install Kubernetes cluster
@@ -70,11 +71,11 @@ Install Options:
   --nodes <ip,ip>             Worker node IP list
   --data-root <path>          Sealos data root, default: /data
   --cri-data <path>           Container runtime data root, default: /data/containerd
-  --cni-helm-opts <args>      Extra Cilium ExtraValues value
+  --cni-helm-opts <args>      ExtraValues passed to current CNI image
   --registry <registry>       Override image registry prefix
   --k8s-version <tag>         Override Kubernetes image tag
   --helm-version <tag>        Override Helm image tag
-  --cni-version <tag>         Override Cilium image tag
+  --cni-version <tag>         Override current CNI image tag
   --skip-image-load           Skip local image load
   --skip-binary-install       Skip Sealos binary install
   --skip-precheck             Skip prechecks
@@ -93,7 +94,8 @@ Notes:
   - Help mode is fast and does not extract the full package.
   - Runtime actions extract payload only when needed.
   - Default Cilium version is 1.18.1.
-  - Default install adds:
+  - Calico packages use registry.cn-shanghai.aliyuncs.com/labring/calico:v3.26.5.
+  - Cilium install adds:
       -e ExtraValues=kubeProxyReplacement=false
 EOF
 }
